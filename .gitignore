@@ -1,8 +1,7 @@
-@"
 *
+!backend/
+!backend/**
 !.gitignore
-
-# Backend contents
 !api/
 !api/**
 !lib/
@@ -11,4 +10,3 @@
 !package.json
 !README.md
 !vercel.json
-"@ | Set-Content ".gitignore"
