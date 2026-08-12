@@ -6,6 +6,7 @@
 // Body: { vk_user_id }
 import { initDb, getEventConfig } from "../../lib/db.js";
 import { currentEventInfo, canStartAttempt } from "../../lib/event.js";
+import { spendLife } from "../../lib/lives.js";
 import { createHash } from "crypto";
 
 export default async function handler(req, res) {
@@ -41,39 +42,21 @@ export default async function handler(req, res) {
     }
   }
 
-  // Атомарная транзакция: проверить жизни и списать.
+  // Атомарное списание жизни (с ленивым регеном) + создание attempt.
   const attemptId = createHash("sha1").update(`${uid}.${info.eventId}.${now}.${Math.random()}`).digest("hex").slice(0, 16);
   const endsAt = now + cfg.attempt_ms;
   let created = false;
   try {
-    await fire.runTransaction(async (tx) => {
-      const livesRef = fire.doc(`lives/${uid}`);
-      const lSnap = await tx.get(livesRef);
-      let lives = cfg.max_lives;
-      if (lSnap.exists && lSnap.data().event_id === info.eventId) {
-        lives = lSnap.data().lives;
-      } else {
-        // новый ивент — выдаём полный запас жизней
-        lives = cfg.max_lives;
-        tx.set(livesRef, { event_id: info.eventId, lives, updated_at: now });
-      }
-      if (lives <= 0) {
-        // нельзя откатить живо в транзакции просто так; бросаем, чтобы не писало
-        tx.set(livesRef, { event_id: info.eventId, lives: 0, updated_at: now }); // no-op guard
-        throw { code: "no_lives" };
-      }
-      tx.update(livesRef, { lives: lives - 1, updated_at: now });
-      const attemptRef = attemptsColl.doc(attemptId);
-      tx.set(attemptRef, {
-        uid, event_id: info.eventId,
-        started_at: now, ends_at: endsAt, submitted_at: 0, score: 0,
-        status: "started", duration: 0, waves: 0, moves: 0, combos: 0, destroyed: 0,
-      });
-      created = true;
+    const spent = await spendLife(fire, uid, info.eventId, cfg.max_lives);
+    if (!spent.ok) return res.status(400).json({ ok: false, error: "no_lives" });
+    created = true;
+    await attemptsColl.doc(attemptId).set({
+      uid, event_id: info.eventId,
+      started_at: now, ends_at: endsAt, submitted_at: 0, score: 0,
+      status: "started", duration: 0, waves: 0, moves: 0, combos: 0, destroyed: 0,
     });
   } catch (err) {
     const reason = (err && err.code !== undefined) ? err.code : "tx_failed";
-    if (reason === "no_lives") return res.status(400).json({ ok: false, error: "no_lives" });
     return res.status(500).json({ ok: false, error: reason, detail: String(err) });
   }
 

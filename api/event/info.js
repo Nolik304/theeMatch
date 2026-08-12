@@ -3,6 +3,7 @@
 import { initDb } from "../../lib/db.js";
 import { getEventConfig } from "../../lib/db.js";
 import { currentEventInfo } from "../../lib/event.js";
+import { getLives } from "../../lib/lives.js";
 
 export default async function handler(req, res) {
   setCors(res);
@@ -27,19 +28,24 @@ export default async function handler(req, res) {
     } catch (e) {
       // ошибка чтения профиля игрока — не критично, lives всё равно отдадим
     }
-    // жизни на текущий ивент
+    // жизни на текущий ивент (с ленивым регеном каждые 5 минут)
     let lives = cfg.max_lives;
     try {
-      const lSnap = await fire.doc(`lives/${uid}`).get();
-      if (lSnap.exists && lSnap.data().event_id === info.eventId) {
-        lives = lSnap.data().lives;
-      }
+      const lv = await getLives(fire, uid, info.eventId, cfg.max_lives);
+      lives = lv.lives;
     } catch (e) {
       // ошибка чтения жизней — по умолчанию полный запас
     }
     if (!my) my = {};
     my.lives = lives;
     my.max_lives = cfg.max_lives;
+    // Монеты (серверный кошелёк) из профиля игрока
+    try {
+      const uSnap = await fire.doc(`users/${uid}`).get();
+      my.coins = uSnap.exists ? (uSnap.data().coins || 0) : 0;
+    } catch (e) {
+      my.coins = 0;
+    }
   }
 
   // Мои награды за предыдущие события (последние несколько).
