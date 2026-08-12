@@ -1,6 +1,4 @@
 *
-!backend/
-!backend/**
 !.gitignore
 !api/
 !api/**
