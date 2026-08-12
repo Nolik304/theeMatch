@@ -1,0 +1,6 @@
+@"
+*
+!backend/
+!backend/**
+!.gitignore
+"@ | Set-Content .gitignore
