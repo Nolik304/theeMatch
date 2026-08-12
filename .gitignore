@@ -1,6 +1,14 @@
 @"
 *
-!backend/
-!backend/**
 !.gitignore
-"@ | Set-Content .gitignore
+
+# Backend contents
+!api/
+!api/**
+!lib/
+!lib/**
+!firestore.rules
+!package.json
+!README.md
+!vercel.json
+"@ | Set-Content ".gitignore"
