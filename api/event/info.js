@@ -8,7 +8,9 @@ export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
   let body = {};
-  try { body = req.method === "GET" ? req.query : JSON.parse(req.body || "{}"); } catch (e) {}
+  if (req.method === "GET") { body = req.query; }
+  else if (typeof req.body === "object" && req.body !== null) { body = req.body; }
+  else { try { body = JSON.parse(req.body || "{}"); } catch (e) {} }
 
   const fire = initDb();
   const cfg = await getEventConfig();

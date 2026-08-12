@@ -12,7 +12,8 @@ export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(204).end();
   let body = {};
-  try { body = JSON.parse(req.body || "{}"); } catch (e) {}
+  if (typeof req.body === "object" && req.body !== null) { body = req.body; }
+  else { try { body = JSON.parse(req.body || "{}"); } catch (e) {} }
   const uid = String(body.vk_user_id || "");
   if (!uid) return res.status(400).json({ ok: false, error: "no_uid" });
 
