@@ -26,14 +26,18 @@ export default async function handler(req, res) {
   }
 
   // последние несколько событий
-  const rSnap = await fire.collectionGroup("rewards").where("uid", "==", uid).limit(20).get();
-  const rewards = [];
-  rSnap.forEach((d) => {
-    const v = d.data();
-    rewards.push({ event_id: v.event_id, rank: v.rank, coins: v.coins, boosters: v.boosters, claimed: !!v.claimed });
-  });
-  rewards.sort((a, b) => b.event_id - a.event_id);
-  res.status(200).json({ ok: true, body: rewards });
+  try {
+    const rSnap = await fire.collectionGroup("rewards").where("uid", "==", uid).limit(20).get();
+    const rewards = [];
+    rSnap.forEach((d) => {
+      const v = d.data();
+      rewards.push({ event_id: v.event_id, rank: v.rank, coins: v.coins, boosters: v.boosters, claimed: !!v.claimed });
+    });
+    rewards.sort((a, b) => b.event_id - a.event_id);
+    res.status(200).json({ ok: true, body: rewards });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
 }
 
 function setCors(res) {
