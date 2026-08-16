@@ -79,7 +79,7 @@ app.all("/api/event/status", async (req, res) => {
     const rec = (await pool.query(
       `select score from leaderboard_records where event_id=$1 and player_id=$2::bigint`,
       [info.eventId, uid])).rows[0];
-    const lives = (p && p.lives_event_id === info.eventId) ? p.lives : CFG.max_lives;
+    const lives = (p && Number(p.lives_event_id) === info.eventId) ? p.lives : CFG.max_lives;
     me = { lives, max_lives: CFG.max_lives, coins: (p && p.coins) || 0, best_score: rec ? rec.score : 0 };
   }
   res.json({ ok: true, body: { ...info, attempt_ms: CFG.attempt_ms, me } });
@@ -98,14 +98,20 @@ app.post("/api/event/start", async (req, res) => {
     `select * from attempts where player_id=$1::bigint and event_id=$2 and status='started' and ends_at>now()
      order by ends_at desc limit 1`, [uid, info.eventId])).rows[0];
   if (active)
-    return res.json({ ok: true, body: { attempt_id: active.id, seed: active.seed, token: active.token,
-      ends_at: new Date(active.ends_at).getTime(), event_id: info.eventId, reused: true } });
+    // 3-минутная попытка ещё не истекла: повторный заход запрещён.
+    // Ответ отдаёт ends_at, чтобы клиент восстановил «Идёт попытка…» и не списывал жизнь.
+    return reject(res, 400, {
+      error: "attempt_in_progress",
+      attempt_id: active.id,
+      ends_at: new Date(active.ends_at).getTime(),
+      event_id: info.eventId,
+    });
 
   const client = await pool.connect();
   try {
     await client.query("begin");
     let p = (await client.query(`select * from players where user_id=$1::bigint for update`, [uid])).rows[0];
-    if (!p || p.lives_event_id !== info.eventId) {
+    if (!p || Number(p.lives_event_id) !== info.eventId) {
       await client.query(
         `insert into players (user_id, lives, lives_event_id) values ($1, $2, $3)
          on conflict (user_id) do update set lives=$2, lives_event_id=$3`,
@@ -293,7 +299,7 @@ app.post("/api/event/buy", async (req, res) => {
     const p = (await client.query(`select * from players where user_id=$1::bigint for update`, [uid])).rows[0];
     if (!p) { await client.query("rollback"); return reject(res, 400, { error: "no_player" }); }
     if (p.coins < CFG.life_cost) { await client.query("rollback"); return reject(res, 400, { error: "not_enough_coins" }); }
-    const cur = (p.lives_event_id === info.eventId) ? p.lives : CFG.max_lives;
+    const cur = (Number(p.lives_event_id) === info.eventId) ? p.lives : CFG.max_lives;
     if (cur >= CFG.max_lives) { await client.query("rollback"); return reject(res, 400, { error: "lives_full" }); }
     await client.query(
       `update players set coins = coins - $1, lives = $2, lives_event_id = $3 where user_id=$4::bigint`,
