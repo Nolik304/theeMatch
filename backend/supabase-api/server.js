@@ -147,12 +147,23 @@ app.post("/api/event/submit", async (req, res) => {
       `select score from leaderboard_records where event_id=$1 and player_id=$2`, [a.event_id, a.player_id])).rows[0];
     return res.json({ ok: true, body: { accepted: true, already: true, best_score: r ? r.score : 0 } });
   }
+  // Брошенная / отклонённая попытка не может дать рекорд/награду.
+  if (a.status === "cancelled")
+    return reject(res, 400, { error: "attempt_cancelled" });
+  if (a.status === "rejected")
+    return reject(res, 400, { error: "attempt_rejected" });
 
   const now = Date.now();
   if (now > new Date(a.ends_at).getTime() + CFG.attempt_ms * 0.25)
     return reject(res, 400, { error: "attempt_expired" });
 
   const s = Math.max(0, Math.round(+score || 0));
+  // Игрок не сыграл (0 очков) — такая «попытка» не попадает в топ и не даёт приз.
+  if (s <= 0) {
+    await pool.query(
+      `update attempts set status='cancelled', submitted_at=now() where id=$1`, [attempt_id]);
+    return reject(res, 400, { error: "score_zero" });
+  }
   const v = validateScore({ score: s, duration, waves, moves, combos, destroyed });
   if (!v.ok) {
     await pool.query(
@@ -302,14 +313,21 @@ app.post("/api/cron/finalize", async (req, res) => {
   const now = Date.now();
   const info = currentEventInfo(now);
   let finalized = 0;
+  let abandoned = 0;
   try {
+    // «Начал и бросил, не сдал результат»: попытка истекла — закрываем её,
+    // чтобы она больше не могла дать рекорд или награду.
+    const ab = await pool.query(
+      `update attempts set status='cancelled' where status='started' and ends_at < now()`
+    );
+    abandoned = ab.rowCount || 0;
     for (let step = 1; step <= 5; step++) {
       const eventId = info.eventId - step;
       const slotEnd = (eventId + 1) * (CFG.event_duration_ms + CFG.cooldown_ms) - CFG.cooldown_ms;
       if (slotEnd > now) break;
       if (await finalizeEvent(eventId)) finalized++;
     }
-    res.json({ ok: true, body: { finalized } });
+    res.json({ ok: true, body: { finalized, abandoned } });
   } catch (e) {
     reject(res, 500, { error: "db_error" });
   }
@@ -324,7 +342,8 @@ async function finalizeEvent(eventId) {
     const ev = (await client.query(`select status from events where id=$1 for update`, [eventId])).rows[0];
     if (ev && ev.status === "finalized") { await client.query("commit"); return false; }
     const rows = (await client.query(
-      `select player_id, score from leaderboard_records where event_id=$1 order by score desc`, [eventId])).rows;
+      `select player_id, score from leaderboard_records
+       where event_id=$1 and score>0 order by score desc`, [eventId])).rows;
     for (let i = 0; i < rows.length; i++) {
       const rank = i + 1;
       const reward = CFG.prizes[rank] || CFG.participation_prize;
@@ -334,6 +353,10 @@ async function finalizeEvent(eventId) {
          on conflict (event_id, player_id) do nothing`,
         [eventId, rows[i].player_id, rank, reward.coins, reward.boosters]);
     }
+    // Событие закрыто: больше никаких попыток/рекордов в него.
+    await client.query(
+      `update attempts set status='cancelled' where event_id=$1 and status='started'`,
+      [eventId]);
     await client.query(
       `insert into events (id, active_start, active_end, next_start, status, finalized_at)
        values ($1,$2,$3,$4,'finalized',now())
