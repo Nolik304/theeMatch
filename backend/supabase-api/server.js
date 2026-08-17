@@ -79,7 +79,8 @@ app.all("/api/event/status", async (req, res) => {
     const rec = (await pool.query(
       `select score from leaderboard_records where event_id=$1 and player_id=$2::bigint`,
       [info.eventId, uid])).rows[0];
-    const lives = (p && Number(p.lives_event_id) === info.eventId) ? p.lives : CFG.max_lives;
+    // Жизни — общий (глобальный) ресурс, не привязанный к событию и не сбрасываемый.
+    const lives = p ? p.lives : CFG.max_lives;
     me = { lives, max_lives: CFG.max_lives, coins: (p && p.coins) || 0, best_score: rec ? rec.score : 0 };
   }
   res.json({ ok: true, body: { ...info, attempt_ms: CFG.attempt_ms, me } });
@@ -111,11 +112,11 @@ app.post("/api/event/start", async (req, res) => {
   try {
     await client.query("begin");
     let p = (await client.query(`select * from players where user_id=$1::bigint for update`, [uid])).rows[0];
-    if (!p || Number(p.lives_event_id) !== info.eventId) {
+    if (!p) {
+      // Новый игрок: создаём с полным запасом жизней. Жизни — общий ресурс, без сброса по событию.
       await client.query(
-        `insert into players (user_id, lives, lives_event_id) values ($1, $2, $3)
-         on conflict (user_id) do update set lives=$2, lives_event_id=$3`,
-        [uid, CFG.max_lives, info.eventId]);
+        `insert into players (user_id, lives) values ($1, $2) on conflict (user_id) do nothing`,
+        [uid, CFG.max_lives]);
       p = (await client.query(`select * from players where user_id=$1::bigint for update`, [uid])).rows[0];
     }
     if (p.lives <= 0) { await client.query("rollback"); return reject(res, 400, { error: "no_lives" }); }
@@ -299,11 +300,10 @@ app.post("/api/event/buy", async (req, res) => {
     const p = (await client.query(`select * from players where user_id=$1::bigint for update`, [uid])).rows[0];
     if (!p) { await client.query("rollback"); return reject(res, 400, { error: "no_player" }); }
     if (p.coins < CFG.life_cost) { await client.query("rollback"); return reject(res, 400, { error: "not_enough_coins" }); }
-    const cur = (Number(p.lives_event_id) === info.eventId) ? p.lives : CFG.max_lives;
-    if (cur >= CFG.max_lives) { await client.query("rollback"); return reject(res, 400, { error: "lives_full" }); }
+    if (p.lives >= CFG.max_lives) { await client.query("rollback"); return reject(res, 400, { error: "lives_full" }); }
     await client.query(
-      `update players set coins = coins - $1, lives = $2, lives_event_id = $3 where user_id=$4::bigint`,
-      [CFG.life_cost, CFG.max_lives, info.eventId, uid]);
+      `update players set coins = coins - $1, lives = $2 where user_id=$3::bigint`,
+      [CFG.life_cost, CFG.max_lives, uid]);
     await client.query("commit");
     res.json({ ok: true, body: { lives: CFG.max_lives, max_lives: CFG.max_lives, coins: p.coins - CFG.life_cost } });
   } catch (e) {
